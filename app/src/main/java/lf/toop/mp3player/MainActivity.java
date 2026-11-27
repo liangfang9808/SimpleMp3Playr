@@ -1,23 +1,29 @@
 
 package lf.toop.mp3player;
-import android.media.AudioManager;
+
 import android.app.Activity;
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.ServiceConnection;
+import android.media.AudioManager;
 import android.os.Bundle;
-import android.os.Handler;
+import android.os.IBinder;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.LayoutInflater;
+import android.view.KeyEvent;
 import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.ListView;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
-import android.media.MediaPlayer;
 
+import androidx.activity.ComponentActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
-import androidx.activity.ComponentActivity;
+
 import java.io.File;
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -27,23 +33,23 @@ import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class MainActivity extends   ComponentActivity  {
+public class MainActivity extends ComponentActivity {
 
-    // 系统全局媒体音量
+    // 音乐根目录
+    private static final String MUSIC_ROOT = "/sdcard/mp3";
+
+    private static final int REQUEST_STORAGE = 1001;
+
+    // 最近播放记录
+    private static final String PREFS_NAME = "player_history";
+    private static final String KEY_LAST_PLAYED = "last_played_path";
+
+    // 音量
     private AudioManager audioManager;
-
-    // 音量控制控件
     private SeekBar seekVolume;
     private TextView txtVolumeValue;
     private TextView btnMute;
-
-    // 静音前保存的音量
     private int previousVolume = -1;
-
-    // 音乐根目录
-    private static final String MUSIC_ROOT ="/sdcard/mp3";// "/storage/sdcard/mp3/";
-
-    private static final int REQUEST_STORAGE = 1001;
 
     // 页面控件
     private TextView txtTitle;
@@ -61,90 +67,150 @@ public class MainActivity extends   ComponentActivity  {
     private ListView listAudio;
     private SeekBar seekBar;
 
-    // 当前目录和列表数据
+    // 文件列表
     private File currentDirectory;
     private final List<File> audioFiles = new ArrayList<>();
 
-    // 当前是否正在显示歌曲列表
     private boolean showingSongs = false;
+    private boolean hasRestoredLastPlayed = false;
 
-    // 列表适配器
     private AudioAdapter adapter;
 
-    // 播放器
-    private MediaPlayer mediaPlayer;
-
-    // 当前播放歌曲索引
+    // 后台播放服务
+    private MusicPlaybackService.MusicBinder musicBinder;
+    private boolean serviceBound = false;
+    private boolean serviceBindRequested = false;
+    // 当前播放歌曲在列表中的索引
     private int currentSongIndex = -1;
+    // 上一次同步的播放路径，用于判断是否真的切换了歌曲
+    private String lastUiPlaybackPath = "";
+    // 服务尚未连接时暂存播放请求
+    private ArrayList<String> pendingPlaylist;
+    private int pendingPlayIndex = -1;
 
-    // 是否已经准备好播放
-    private boolean isPrepared = false;
+    // 用户是否正在拖动进度条
+    private boolean userSeeking = false;
 
-    // 是否正在异步准备
-    private boolean isPreparing = false;
+    /**
+     * Service 连接管理。
+     */
+    private final ServiceConnection serviceConnection =
+            new ServiceConnection() {
 
-    // 最近播放记录：只保存最后一次播放的歌曲路径
-    private static final String PREFS_NAME = "player_history";
-    private static final String KEY_LAST_PLAYED = "last_played_path";
+                @Override
+                public void onServiceConnected(ComponentName name, IBinder service) {
 
-    // 进度更新
-    private final Handler handler = new Handler();
+                    MusicPlaybackService.MusicBinder binder =
+                            (MusicPlaybackService.MusicBinder) service;
 
-    private final Runnable progressRunnable = new Runnable() {
-        @Override
-        public void run() {
-            updateProgress();
+                    musicBinder = binder;
+                    serviceBound = true;
 
-            if (mediaPlayer != null && isPrepared) {
-                handler.postDelayed(this, 500);
-            }
-        }
-    };
+                    // 注册播放状态回调
+                    binder.setListener((path, index, duration, position,
+                                        playing, preparing, completed) -> {
+
+                        runOnUiThread(() -> updateUiFromService(
+                                path,
+                                index,
+                                duration,
+                                position,
+                                playing,
+                                preparing,
+                                completed
+                        ));
+                    });
+
+                    // 处理尚未完成的播放请求
+                    if (pendingPlaylist != null && pendingPlayIndex >= 0) {
+
+                        binder.playPlaylist(pendingPlaylist, pendingPlayIndex);
+
+                        pendingPlaylist = null;
+                        pendingPlayIndex = -1;
+
+                    } else {
+
+                        refreshFromService();
+                    }
+                }
+
+                @Override
+                public void onServiceDisconnected(ComponentName name) {
+
+                    musicBinder = null;
+                    serviceBound = false;
+                }
+            };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+
         super.onCreate(savedInstanceState);
+
         setContentView(R.layout.activity_main);
-// 指定当前 Activity 的物理音量键控制媒体音量
+
+        // 物理音量键控制系统媒体音量
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
 
         initViews();
         initEvents();
         initVolumeControl();
         initBackPressed();
+
         checkStoragePermission();
-
-        restoreLastPlayed();//重启时，恢复播放
-    }
-    /**
-     * 保存最近播放的歌曲，只保留一条记录
-     */
-    private void saveLastPlayed(File file) {
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .edit()
-                .putString(KEY_LAST_PLAYED, file.getAbsolutePath())
-                .apply();
     }
 
     /**
-     * 读取最近播放的歌曲路径
+     * 页面进入前台时绑定播放服务。
      */
-    private String getLastPlayedPath() {
-        return getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .getString(KEY_LAST_PLAYED, "");
+    @Override
+    protected void onStart() {
+
+        super.onStart();
+
+        Intent intent = new Intent(this, MusicPlaybackService.class);
+
+        serviceBindRequested = bindService(
+                intent,
+                serviceConnection,
+                Context.BIND_AUTO_CREATE
+        );
     }
 
     /**
-     * 删除无效的播放记录
+     * 页面离开前台时解除绑定。
+     *
+     * 注意：这里不停止 Service，不释放 MediaPlayer。
      */
-    private void clearLastPlayed() {
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .edit()
-                .remove(KEY_LAST_PLAYED)
-                .apply();
+    @Override
+    protected void onStop() {
+
+        if (serviceBound && musicBinder != null) {
+            musicBinder.setListener(null);
+        }
+
+        if (serviceBindRequested) {
+            unbindService(serviceConnection);
+            serviceBindRequested = false;
+        }
+
+        serviceBound = false;
+        musicBinder = null;
+
+        super.onStop();
     }
+
     /**
-     * 初始化页面控件
+     * 页面销毁时不释放后台播放器。
+     */
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+    }
+
+    /**
+     * 初始化页面控件。
      */
     private void initViews() {
 
@@ -164,18 +230,20 @@ public class MainActivity extends   ComponentActivity  {
         listAudio = findViewById(R.id.listAudio);
         seekBar = findViewById(R.id.seekBar);
 
+        seekBar.setMax(1000);
+
         adapter = new AudioAdapter();
         listAudio.setAdapter(adapter);
 
         seekVolume = findViewById(R.id.seekVolume);
         txtVolumeValue = findViewById(R.id.txtVolumeValue);
         btnMute = findViewById(R.id.btnMute);
-        // 获取系统音量管理器
+
         audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
     }
 
     /**
-     * 初始化按钮事件
+     * 初始化按钮事件。
      */
     private void initEvents() {
 
@@ -187,45 +255,50 @@ public class MainActivity extends   ComponentActivity  {
 
         btnNext.setOnClickListener(v -> playNext());
 
-        // 拖动播放进度
-        seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+        // 播放进度拖动
+        seekBar.setOnSeekBarChangeListener(
+                new SeekBar.OnSeekBarChangeListener() {
 
-            @Override
-            public void onProgressChanged(
-                    SeekBar seekBar,
-                    int progress,
-                    boolean fromUser) {
+                    @Override
+                    public void onProgressChanged(
+                            SeekBar bar,
+                            int progress,
+                            boolean fromUser) {
 
-            }
+                        if (fromUser) {
+                            userSeeking = true;
+                        }
+                    }
 
-            @Override
-            public void onStartTrackingTouch(SeekBar seekBar) {
-            }
+                    @Override
+                    public void onStartTrackingTouch(SeekBar bar) {
+                        userSeeking = true;
+                    }
 
-            @Override
-            public void onStopTrackingTouch(SeekBar seekBar) {
+                    @Override
+                    public void onStopTrackingTouch(SeekBar bar) {
 
-                if (mediaPlayer != null && isPrepared) {
+                        userSeeking = false;
 
-                    int duration = mediaPlayer.getDuration();
+                        if (musicBinder != null) {
 
-                    int position = (int) (
-                            duration * (seekBar.getProgress() / 1000.0)
-                    );
+                            int duration = musicBinder.getDuration();
 
-                    mediaPlayer.seekTo(position);
-                    updateProgress();
-                }
-            }
-        });
+                            int position = (int) (
+                                    duration * (bar.getProgress() / 1000.0)
+                            );
 
-        // 点击列表项目
+                            musicBinder.seekTo(position);
+                        }
+                    }
+                });
+
+        // 点击文件夹或歌曲
         listAudio.setOnItemClickListener((parent, view, position, id) -> {
 
             if (!showingSongs) {
 
-                File directory = audioFiles.get(position);
-                loadMp3Files(directory);
+                loadMp3Files(audioFiles.get(position));
 
             } else {
 
@@ -235,11 +308,10 @@ public class MainActivity extends   ComponentActivity  {
     }
 
     /**
-     * 检查存储读取权限
+     * 检查存储读取权限。
      */
     private void checkStoragePermission() {
 
-        // Android 5.x 无需运行时权限
         if (android.os.Build.VERSION.SDK_INT < 23) {
             showDirectories();
             return;
@@ -251,8 +323,11 @@ public class MainActivity extends   ComponentActivity  {
         );
 
         if (permission == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+
             showDirectories();
+
         } else {
+
             ActivityCompat.requestPermissions(
                     this,
                     new String[]{
@@ -263,9 +338,6 @@ public class MainActivity extends   ComponentActivity  {
         }
     }
 
-    /**
-     * 权限申请结果
-     */
     @Override
     public void onRequestPermissionsResult(
             int requestCode,
@@ -277,19 +349,26 @@ public class MainActivity extends   ComponentActivity  {
         if (requestCode == REQUEST_STORAGE) {
 
             if (grantResults.length > 0 &&
-                    grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    grantResults[0] ==
+                            android.content.pm.PackageManager.PERMISSION_GRANTED) {
 
                 showDirectories();
 
             } else {
+
                 txtStatus.setText("没有获得存储读取权限");
-                Toast.makeText(this, "请允许读取存储权限", Toast.LENGTH_LONG).show();
+
+                Toast.makeText(
+                        this,
+                        "请允许读取存储权限",
+                        Toast.LENGTH_LONG
+                ).show();
             }
         }
     }
 
     /**
-     * 显示音乐根目录下的文件夹
+     * 显示音乐根目录。
      */
     private void showDirectories() {
 
@@ -306,16 +385,20 @@ public class MainActivity extends   ComponentActivity  {
         audioFiles.clear();
 
         if (!root.exists() || !root.isDirectory()) {
+
             adapter.notifyDataSetChanged();
             txtStatus.setText("音乐目录不存在");
+
             return;
         }
 
         File[] directories = root.listFiles(File::isDirectory);
 
         if (directories == null || directories.length == 0) {
+
             adapter.notifyDataSetChanged();
             txtStatus.setText("暂无音乐文件夹");
+
             return;
         }
 
@@ -328,12 +411,17 @@ public class MainActivity extends   ComponentActivity  {
 
         txtStatus.setText("共 " + audioFiles.size() + " 个文件夹");
 
-        // 启动时尝试恢复上次播放的歌曲
-        //restoreLastPlayed();
+        // 只在第一次加载根目录时恢复最近播放位置
+        if (!hasRestoredLastPlayed) {
+
+            hasRestoredLastPlayed = true;
+
+            restoreLastPlayed();
+        }
     }
 
     /**
-     * 显示指定文件夹中的 MP3 文件
+     * 加载指定文件夹的 MP3 文件。
      */
     private void loadMp3Files(File directory) {
 
@@ -359,12 +447,13 @@ public class MainActivity extends   ComponentActivity  {
 
             audioFiles.addAll(Arrays.asList(files));
         }
-// 根据保存的路径查找最近播放歌曲
+
         currentSongIndex = -1;
 
         String lastPath = getLastPlayedPath();
 
         for (int i = 0; i < audioFiles.size(); i++) {
+
             if (audioFiles.get(i).getAbsolutePath().equals(lastPath)) {
                 currentSongIndex = i;
                 break;
@@ -383,22 +472,23 @@ public class MainActivity extends   ComponentActivity  {
 
             if (currentSongIndex >= 0) {
 
-                // 恢复歌曲名称及继续播放按钮
                 File lastFile = audioFiles.get(currentSongIndex);
 
                 txtPlayingName.setText(lastFile.getName());
+
                 btnPlay.setText("继续播放");
 
                 txtStatus.setText("已恢复上次播放记录");
 
-                // 自动滚动到最近播放行
                 listAudio.setSelection(currentSongIndex);
+
             }
         }
     }
 
+
     /**
-     * 点击歌曲后播放
+     * 点击歌曲，交给后台 Service 播放。
      */
     private void playFile(int index) {
 
@@ -410,219 +500,339 @@ public class MainActivity extends   ComponentActivity  {
 
         currentSongIndex = index;
 
-// 保存最近播放歌曲，覆盖之前的记录
-        saveLastPlayed(file);
-
-        releasePlayer();
-
         txtPlayingName.setText(file.getName());
         txtCurrentTime.setText("00:00");
         txtTotalTime.setText("00:00");
 
         seekBar.setProgress(0);
-        btnPlay.setText("准备中");
 
+        btnPlay.setText("准备中");
         txtStatus.setText("正在加载：" + file.getName());
 
-        try {
+        // 组装当前文件夹的播放列表
+        ArrayList<String> paths = new ArrayList<>();
 
-            mediaPlayer = new MediaPlayer();
-// 明确使用系统媒体音量通道
-            mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
-
-            mediaPlayer.setDataSource(file.getAbsolutePath());
-
-            isPrepared = false;
-            isPreparing = true;
-
-            mediaPlayer.setOnPreparedListener(mp -> {
-
-                isPrepared = true;
-                isPreparing = false;
-
-                mp.start();
-
-                btnPlay.setText("暂停");
-
-                txtStatus.setText("正在播放");
-
-                txtTotalTime.setText(formatTime(mp.getDuration()));
-
-                updateProgress();
-
-                handler.removeCallbacks(progressRunnable);
-                handler.post(progressRunnable);
-            });
-
-            mediaPlayer.setOnCompletionListener(mp -> {
-
-                if (currentSongIndex < audioFiles.size() - 1) {
-
-                    playNext();
-
-                } else {
-
-                    releasePlayer();
-
-                    btnPlay.setText("播放");
-                    txtStatus.setText("播放列表已结束");
-
-                    seekBar.setProgress(1000);
-                }
-            });
-
-            mediaPlayer.setOnErrorListener((mp, what, extra) -> {
-
-                releasePlayer();
-
-                btnPlay.setText("播放");
-                txtStatus.setText("播放失败，请检查音频文件");
-
-                Toast.makeText(
-                        this,
-                        "无法播放该 MP3 文件",
-                        Toast.LENGTH_SHORT
-                ).show();
-
-                return true;
-            });
-
-            mediaPlayer.prepareAsync();
-
-        } catch (Exception e) {
-
-            releasePlayer();
-
-            btnPlay.setText("播放");
-            txtStatus.setText("打开歌曲失败");
-
-            Toast.makeText(
-                    this,
-                    "播放失败：" + e.getMessage(),
-                    Toast.LENGTH_LONG
-            ).show();
+        for (File audioFile : audioFiles) {
+            paths.add(audioFile.getAbsolutePath());
         }
+
+        // 启动服务，让 Service 独立于 Activity 存活
+        Intent serviceIntent = new Intent(
+                this,
+                MusicPlaybackService.class
+        );
+
+        startService(serviceIntent);
+
+        // 如果 Service 已经连接，立即播放
+        if (musicBinder != null) {
+
+            musicBinder.playPlaylist(paths, index);
+
+        } else {
+
+            // 等待 Service 连接完成
+            pendingPlaylist = paths;
+            pendingPlayIndex = index;
+        }
+
+        saveLastPlayed(file);
 
         adapter.notifyDataSetChanged();
     }
 
     /**
-     * 播放 / 暂停
+     * 播放 / 暂停。
+     */
+
+    /**
+     * 播放 / 暂停。
+     * 如果 Service 尚未加载歌曲，则使用恢复的上次播放记录初始化播放器。
      */
     private void togglePlayback() {
 
-        if (mediaPlayer == null) {
+        if (musicBinder != null) {
 
-            if (showingSongs && !audioFiles.isEmpty()) {
-                playFile(currentSongIndex >= 0 ? currentSongIndex : 0);
+            // 检查后台 Service 是否已经加载歌曲
+            String servicePath = musicBinder.getCurrentPath();
+
+            if (pathIsEmpty(servicePath)) {
+
+                // Service 没有歌曲，尝试恢复上次播放的歌曲
+                if (showingSongs && !audioFiles.isEmpty()) {
+
+                    int index = currentSongIndex >= 0 &&
+                            currentSongIndex < audioFiles.size()
+                            ? currentSongIndex : 0;
+
+                    playFile(index);
+
+                } else {
+
+                    Toast.makeText(
+                            this,
+                            "请先进入歌曲文件夹",
+                            Toast.LENGTH_SHORT
+                    ).show();
+                }
+
             } else {
-                Toast.makeText(this, "请先进入歌曲文件夹", Toast.LENGTH_SHORT).show();
+
+                // 已经加载歌曲，正常播放 / 暂停
+                musicBinder.togglePlayback();
             }
 
             return;
         }
 
-        if (isPreparing) {
-            return;
-        }
+        // Service 尚未连接，先提交播放请求
+        if (showingSongs && !audioFiles.isEmpty()) {
 
-        if (!isPrepared) {
-            return;
-        }
+            int index = currentSongIndex >= 0 &&
+                    currentSongIndex < audioFiles.size()
+                    ? currentSongIndex : 0;
 
-        if (mediaPlayer.isPlaying()) {
-
-            mediaPlayer.pause();
-            btnPlay.setText("继续");
-            txtStatus.setText("已暂停");
+            playFile(index);
 
         } else {
 
-            mediaPlayer.start();
-            btnPlay.setText("暂停");
-            txtStatus.setText("正在播放");
-
-            handler.removeCallbacks(progressRunnable);
-            handler.post(progressRunnable);
+            Toast.makeText(
+                    this,
+                    "请先进入歌曲文件夹",
+                    Toast.LENGTH_SHORT
+            ).show();
         }
     }
 
+
     /**
-     * 上一首
+     * 上一首。
      */
     private void playPrevious() {
 
-        if (!showingSongs || audioFiles.isEmpty()) {
-            return;
-        }
+        if (musicBinder != null) {
 
-        if (currentSongIndex <= 0) {
-            playFile(0);
-        } else {
-            playFile(currentSongIndex - 1);
+            musicBinder.playPrevious();
+
+        } else if (showingSongs && !audioFiles.isEmpty()) {
+
+            playFile(Math.max(0, currentSongIndex - 1));
         }
     }
 
     /**
-     * 下一首
-     * 最后一首不循环
+     * 下一首。
      */
     private void playNext() {
 
-        if (!showingSongs || audioFiles.isEmpty()) {
+        if (musicBinder != null) {
+
+            musicBinder.playNext();
+
+        } else if (showingSongs && !audioFiles.isEmpty()) {
+
+            if (currentSongIndex < audioFiles.size() - 1) {
+                playFile(currentSongIndex + 1);
+            }
+        }
+    }
+
+    /**
+     * 从 Service 同步当前播放信息。
+     */
+    private void refreshFromService() {
+
+        if (musicBinder == null) {
             return;
         }
 
-        if (currentSongIndex >= audioFiles.size() - 1) {
+        String path = musicBinder.getCurrentPath();
 
-            releasePlayer();
+        if (path == null || path.isEmpty()) {
+            return;
+        }
+
+        updateUiFromService(
+                path,
+                musicBinder.getCurrentIndex(),
+                musicBinder.getDuration(),
+                musicBinder.getPosition(),
+                musicBinder.isPlaying(),
+                musicBinder.isPreparing(),
+                false
+        );
+    }
+
+    /**
+     * 更新界面。
+     */
+
+    /**
+     * 更新界面。
+     *
+     * 进度回调只更新底部控制区域；
+     * 只有歌曲真正切换时才更新列表高亮。
+     * 不再自动滚动列表，避免影响用户浏览。
+     */
+    private void updateUiFromService(
+            String path,
+            int index,
+            int duration,
+            int position,
+            boolean playing,
+            boolean preparing,
+            boolean completed) {
+
+        boolean validPath = path != null && !path.isEmpty();
+
+        // 判断是否切换了歌曲
+        boolean songChanged = validPath &&
+                !path.equals(lastUiPlaybackPath);
+
+        if (validPath) {
+
+            txtPlayingName.setText(new File(path).getName());
+
+            // 只有歌曲切换时才处理列表选中状态
+            if (songChanged) {
+
+                lastUiPlaybackPath = path;
+
+                if (showingSongs) {
+
+                    int newIndex = -1;
+
+                    for (int i = 0; i < audioFiles.size(); i++) {
+                        if (audioFiles.get(i).getAbsolutePath().equals(path)) {
+                            newIndex = i;
+                            break;
+                        }
+                    }
+
+                    if (newIndex != currentSongIndex) {
+
+                        currentSongIndex = newIndex;
+
+                        // 更新行的高亮状态，但不强制改变滚动位置
+                        adapter.notifyDataSetChanged();
+                    }
+                }
+            }
+        }
+
+        // 以下只更新底部播放控制区域，不刷新列表
+        if (!userSeeking && duration > 0) {
+
+            int progress = (int) (
+                    position * 1000.0 / duration
+            );
+
+            seekBar.setProgress(progress);
+        }
+
+        txtCurrentTime.setText(formatTime(position));
+        txtTotalTime.setText(formatTime(duration));
+
+        if (preparing) {
+
+            btnPlay.setText("准备中");
+            txtStatus.setText("正在加载歌曲");
+
+        } else if (completed) {
 
             btnPlay.setText("播放");
-            txtStatus.setText("已经是最后一首");
+            txtStatus.setText("播放列表已结束");
 
-            return;
+            seekBar.setProgress(1000);
+
+        } else if (playing) {
+
+            btnPlay.setText("暂停");
+            txtStatus.setText("正在播放");
+
+        } else if (validPath) {
+
+            btnPlay.setText("继续");
+            txtStatus.setText("已暂停");
         }
+    }
 
-        playFile(currentSongIndex + 1);
+
+    private boolean pathIsEmpty(String path) {
+        return path == null || path.isEmpty();
     }
 
     /**
-     * 更新播放进度
+     * 保存最近播放路径。
      */
-    private void updateProgress() {
+    private void saveLastPlayed(File file) {
 
-        if (mediaPlayer == null || !isPrepared) {
-            return;
-        }
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit()
+                .putString(KEY_LAST_PLAYED, file.getAbsolutePath())
+                .apply();
+    }
 
-        try {
+    private String getLastPlayedPath() {
 
-            int duration = mediaPlayer.getDuration();
-            int position = mediaPlayer.getCurrentPosition();
+        return getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getString(KEY_LAST_PLAYED, "");
+    }
 
-            if (duration > 0) {
+    private void clearLastPlayed() {
 
-                int progress = (int) (
-                        position * 1000.0 / duration
-                );
-
-                seekBar.setProgress(progress);
-            }
-
-            txtCurrentTime.setText(formatTime(position));
-
-            txtTotalTime.setText(formatTime(duration));
-
-        } catch (Exception ignored) {
-        }
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit()
+                .remove(KEY_LAST_PLAYED)
+                .apply();
     }
 
     /**
-     * 格式化时间
+     * 恢复最近播放歌曲所在目录。
+     */
+    private void restoreLastPlayed() {
+
+        String path = getLastPlayedPath();
+
+        if (path == null || path.trim().isEmpty()) {
+            return;
+        }
+
+        File lastFile = new File(path);
+
+        if (!lastFile.exists() || !lastFile.isFile()) {
+
+            clearLastPlayed();
+            return;
+        }
+
+        File parent = lastFile.getParentFile();
+
+        if (parent == null || !parent.isDirectory()) {
+
+            clearLastPlayed();
+            return;
+        }
+
+        File root = new File(MUSIC_ROOT);
+
+        if (parent.getParentFile() == null ||
+                !parent.getParentFile().getAbsolutePath()
+                        .equals(root.getAbsolutePath())) {
+
+            clearLastPlayed();
+            return;
+        }
+
+        loadMp3Files(parent);
+    }
+
+    /**
+     * 格式化时间。
      */
     private String formatTime(int milliseconds) {
 
-        int totalSeconds = milliseconds / 1000;
+        int totalSeconds = Math.max(0, milliseconds) / 1000;
 
         int minutes = totalSeconds / 60;
         int seconds = totalSeconds % 60;
@@ -636,86 +846,27 @@ public class MainActivity extends   ComponentActivity  {
     }
 
     /**
-     * 释放播放器
+     * 格式化文件大小。
      */
-    private void releasePlayer() {
+    private String formatFileSize(long size) {
 
-        handler.removeCallbacks(progressRunnable);
-
-        if (mediaPlayer != null) {
-
-            try {
-                mediaPlayer.setOnCompletionListener(null);
-                mediaPlayer.setOnPreparedListener(null);
-                mediaPlayer.setOnErrorListener(null);
-                mediaPlayer.release();
-            } catch (Exception ignored) {
-            }
-
-            mediaPlayer = null;
+        if (size < 1024) {
+            return size + " B";
         }
 
-        isPrepared = false;
-        isPreparing = false;
+        if (size < 1024 * 1024) {
+            return String.format(Locale.US, "%.1f KB", size / 1024.0);
+        }
+
+        return String.format(
+                Locale.US,
+                "%.1f MB",
+                size / (1024.0 * 1024.0)
+        );
     }
 
     /**
-     * 返回文件夹列表
-     */
-    private void goBack() {
-
-        if (showingSongs) {
-            showDirectories();
-        }
-    }
-    /**
-     * 恢复最近一次播放的歌曲
-     *
-     * 如果歌曲仍然存在：
-     * 1. 自动进入歌曲所在文件夹
-     * 2. 定位到上次播放的歌曲
-     * 3. 高亮显示
-     * 4. 等待用户点击继续播放
-     */
-    private void restoreLastPlayed() {
-
-        String path = getLastPlayedPath();
-
-        if (path == null || path.trim().isEmpty()) {
-            return;
-        }
-
-        File lastFile = new File(path);
-
-        // 歌曲已经被删除或移动
-        if (!lastFile.exists() || !lastFile.isFile()) {
-            clearLastPlayed();
-            return;
-        }
-
-        File parent = lastFile.getParentFile();
-
-        if (parent == null || !parent.isDirectory()) {
-            clearLastPlayed();
-            return;
-        }
-
-        // 只允许恢复音乐根目录下一级文件夹中的歌曲
-        File root = new File(MUSIC_ROOT);
-
-        if (parent.getParentFile() == null ||
-                !parent.getParentFile().getAbsolutePath()
-                        .equals(root.getAbsolutePath())) {
-            clearLastPlayed();
-            return;
-        }
-
-        // 自动打开上次播放歌曲所在的文件夹
-        loadMp3Files(parent);
-    }
-    /**
-     * 自然排序
-     * 例如：1.mp3、2.mp3、10.mp3
+     * 自然排序。
      */
     private int naturalCompare(String s1, String s2) {
 
@@ -751,28 +902,174 @@ public class MainActivity extends   ComponentActivity  {
     }
 
     /**
-     * 格式化文件大小
+     * 返回文件夹列表。
      */
-    private String formatFileSize(long size) {
+    private void goBack() {
 
-        if (size < 1024) {
-            return size + " B";
+        if (showingSongs) {
+            showDirectories();
         }
-
-        if (size < 1024 * 1024) {
-            return String.format(Locale.US, "%.1f KB", size / 1024.0);
-        }
-
-        return String.format(
-                Locale.US,
-                "%.1f MB",
-                size / (1024.0 * 1024.0)
-        );
     }
 
     /**
-     * 列表适配器
-     * 使用 item_audio.xml 创建每一行
+     * 初始化返回键。
+     */
+    private void initBackPressed() {
+
+        getOnBackPressedDispatcher().addCallback(
+                this,
+                new androidx.activity.OnBackPressedCallback(true) {
+
+                    @Override
+                    public void handleOnBackPressed() {
+
+                        if (showingSongs) {
+
+                            goBack();
+
+                        } else {
+
+                            setEnabled(false);
+
+                            getOnBackPressedDispatcher().onBackPressed();
+                        }
+                    }
+                });
+    }
+
+    /**
+     * 初始化系统全局音量。
+     */
+    private void initVolumeControl() {
+
+        if (audioManager == null) {
+            return;
+        }
+
+        int maxVolume = audioManager.getStreamMaxVolume(
+                AudioManager.STREAM_MUSIC);
+
+        int currentVolume = audioManager.getStreamVolume(
+                AudioManager.STREAM_MUSIC);
+
+        seekVolume.setMax(maxVolume);
+        seekVolume.setProgress(currentVolume);
+
+        updateVolumeText(currentVolume, maxVolume);
+
+        seekVolume.setOnSeekBarChangeListener(
+                new SeekBar.OnSeekBarChangeListener() {
+
+                    @Override
+                    public void onProgressChanged(
+                            SeekBar bar,
+                            int progress,
+                            boolean fromUser) {
+
+                        if (fromUser) {
+
+                            audioManager.setStreamVolume(
+                                    AudioManager.STREAM_MUSIC,
+                                    progress,
+                                    0
+                            );
+
+                            updateVolumeText(progress, maxVolume);
+                        }
+                    }
+
+                    @Override
+                    public void onStartTrackingTouch(SeekBar bar) {
+                    }
+
+                    @Override
+                    public void onStopTrackingTouch(SeekBar bar) {
+                    }
+                });
+
+        // 静音切换
+        btnMute.setOnClickListener(v -> {
+
+            int volume = audioManager.getStreamVolume(
+                    AudioManager.STREAM_MUSIC);
+
+            if (volume > 0) {
+
+                previousVolume = volume;
+
+                audioManager.setStreamVolume(
+                        AudioManager.STREAM_MUSIC,
+                        0,
+                        0
+                );
+
+            } else {
+
+                int restoreVolume = previousVolume > 0
+                        ? previousVolume
+                        : Math.max(1, maxVolume / 2);
+
+                audioManager.setStreamVolume(
+                        AudioManager.STREAM_MUSIC,
+                        restoreVolume,
+                        0
+                );
+            }
+
+            refreshVolumeControl();
+        });
+    }
+
+    private void updateVolumeText(int volume, int maxVolume) {
+
+        int percent = maxVolume > 0
+                ? volume * 100 / maxVolume
+                : 0;
+
+        txtVolumeValue.setText(percent + "%");
+
+        if (volume == 0) {
+            btnMute.setText("🔇");
+        } else if (percent < 40) {
+            btnMute.setText("🔈");
+        } else {
+            btnMute.setText("🔊");
+        }
+    }
+
+    private void refreshVolumeControl() {
+
+        if (audioManager == null || seekVolume == null) {
+            return;
+        }
+
+        int maxVolume = audioManager.getStreamMaxVolume(
+                AudioManager.STREAM_MUSIC);
+
+        int currentVolume = audioManager.getStreamVolume(
+                AudioManager.STREAM_MUSIC);
+
+        seekVolume.setProgress(currentVolume);
+
+        updateVolumeText(currentVolume, maxVolume);
+    }
+
+    @Override
+    public boolean onKeyUp(int keyCode, KeyEvent event) {
+
+        boolean result = super.onKeyUp(keyCode, event);
+
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
+                keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+
+            seekVolume.postDelayed(this::refreshVolumeControl, 100);
+        }
+
+        return result;
+    }
+
+    /**
+     * 列表适配器。
      */
     private class AudioAdapter extends BaseAdapter {
 
@@ -795,7 +1092,10 @@ public class MainActivity extends   ComponentActivity  {
         }
 
         @Override
-        public View getView(int position, View convertView, ViewGroup parent) {
+        public View getView(
+                int position,
+                View convertView,
+                ViewGroup parent) {
 
             ViewHolder holder;
 
@@ -836,7 +1136,6 @@ public class MainActivity extends   ComponentActivity  {
 
                 holder.arrow.setVisibility(View.VISIBLE);
 
-                // 文件夹行恢复白色背景
                 convertView.setBackgroundColor(0xFFFFFFFF);
 
             } else {
@@ -846,13 +1145,11 @@ public class MainActivity extends   ComponentActivity  {
 
                 holder.info.setText(formatFileSize(file.length()));
 
-                // 判断是否为最近一次播放的歌曲
                 boolean isLastPlayed =
                         file.getAbsolutePath().equals(getLastPlayedPath());
 
                 if (isLastPlayed) {
 
-                    // 最近播放行：浅蓝背景、蓝色图标和文字
                     convertView.setBackgroundColor(0xFFE6F7FC);
 
                     holder.icon.setTextColor(0xFF159BCB);
@@ -861,7 +1158,6 @@ public class MainActivity extends   ComponentActivity  {
 
                 } else {
 
-                    // 普通歌曲行
                     convertView.setBackgroundColor(0xFFFFFFFF);
 
                     holder.icon.setTextColor(0xFF89939F);
@@ -879,183 +1175,5 @@ public class MainActivity extends   ComponentActivity  {
             TextView info;
             TextView arrow;
         }
-    }
-
-    /**
-     * 注册系统返回事件
-     * 使用 AndroidX 兼容不同 Android 版本
-     */
-    private void initBackPressed() {
-
-        getOnBackPressedDispatcher().addCallback(
-                this,
-                new androidx.activity.OnBackPressedCallback(true) {
-
-                    @Override
-                    public void handleOnBackPressed() {
-
-                        if (showingSongs) {
-
-                            // 当前在歌曲列表，返回文件夹列表
-                            goBack();
-
-                        } else {
-
-                            // 当前在根目录，允许系统执行默认返回
-                            setEnabled(false);
-                            getOnBackPressedDispatcher().onBackPressed();
-                        }
-                    }
-                }
-        );
-    }
-
-    /**
-     * 页面销毁时释放音频资源
-     */
-    @Override
-    protected void onDestroy() {
-
-        releasePlayer();
-
-        super.onDestroy();
-    }
-
-    /**
-     * 初始化全局媒体音量控制
-     * 音量滑块与手机物理音量键使用同一个系统音量
-     */
-    private void initVolumeControl() {
-
-        if (audioManager == null) {
-            return;
-        }
-
-        int maxVolume = audioManager.getStreamMaxVolume(
-                AudioManager.STREAM_MUSIC);
-
-        int currentVolume = audioManager.getStreamVolume(
-                AudioManager.STREAM_MUSIC);
-
-        seekVolume.setMax(maxVolume);
-        seekVolume.setProgress(currentVolume);
-
-        updateVolumeText(currentVolume, maxVolume);
-
-        // 拖动滑块调整系统媒体音量
-        seekVolume.setOnSeekBarChangeListener(
-                new SeekBar.OnSeekBarChangeListener() {
-
-                    @Override
-                    public void onProgressChanged(
-                            SeekBar seekBar,
-                            int progress,
-                            boolean fromUser) {
-
-                        if (fromUser) {
-                            audioManager.setStreamVolume(
-                                    AudioManager.STREAM_MUSIC,
-                                    progress,
-                                    0);
-
-                            updateVolumeText(progress, maxVolume);
-                        }
-                    }
-
-                    @Override
-                    public void onStartTrackingTouch(SeekBar seekBar) {
-                    }
-
-                    @Override
-                    public void onStopTrackingTouch(SeekBar seekBar) {
-                    }
-                });
-
-        // 点击喇叭图标切换静音
-        btnMute.setOnClickListener(v -> {
-
-            int volume = audioManager.getStreamVolume(
-                    AudioManager.STREAM_MUSIC);
-
-            if (volume > 0) {
-
-                previousVolume = volume;
-
-                audioManager.setStreamVolume(
-                        AudioManager.STREAM_MUSIC, 0, 0);
-
-            } else {
-
-                int restoreVolume = previousVolume > 0
-                        ? previousVolume
-                        : Math.max(1, maxVolume / 2);
-
-                audioManager.setStreamVolume(
-                        AudioManager.STREAM_MUSIC,
-                        restoreVolume,
-                        0);
-            }
-
-            refreshVolumeControl();
-        });
-    }
-
-    /**
-     * 更新音量百分比和图标
-     */
-    private void updateVolumeText(int volume, int maxVolume) {
-
-        int percent = maxVolume > 0
-                ? volume * 100 / maxVolume
-                : 0;
-
-        txtVolumeValue.setText(percent + "%");
-
-        if (volume == 0) {
-            btnMute.setText("🔇");
-        } else if (percent < 40) {
-            btnMute.setText("🔈");
-        } else {
-            btnMute.setText("🔊");
-        }
-    }
-
-    /**
-     * 从系统重新读取媒体音量并更新滑块
-     */
-    private void refreshVolumeControl() {
-
-        if (audioManager == null || seekVolume == null) {
-            return;
-        }
-
-        int maxVolume = audioManager.getStreamMaxVolume(
-                AudioManager.STREAM_MUSIC);
-
-        int currentVolume = audioManager.getStreamVolume(
-                AudioManager.STREAM_MUSIC);
-
-        seekVolume.setProgress(currentVolume);
-
-        updateVolumeText(currentVolume, maxVolume);
-    }
-
-    /**
-     * 手机物理音量键松开后，同步 App 内音量滑块
-     *
-     * 实际音量调整由系统处理，不拦截物理按键
-     */
-    @Override
-    public boolean onKeyUp(int keyCode, android.view.KeyEvent event) {
-
-        boolean result = super.onKeyUp(keyCode, event);
-
-        if (keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP ||
-                keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN) {
-
-            handler.postDelayed(this::refreshVolumeControl, 100);
-        }
-
-        return result;
     }
 }
