@@ -1,0 +1,167 @@
+pluginManagement {
+    repositories {
+        google {
+            content {
+
+                // 阿里云云效仓库：https://maven.aliyun.com/mvn/guide
+                maven { url 'https://maven.aliyun.com/repository/central' }
+                maven { url 'https://maven.aliyun.com/repository/jcenter' }
+                maven { url 'https://maven.aliyun.com/repository/google' }
+
+                // 第二步：可选-配置阿里云其他仓库（如gradle-plugin、spring等）
+                maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+                maven { url 'https://maven.aliyun.com/repository/spring' }
+
+                maven {
+                    // 正式版组件仓库
+                    url "https://maven.byted.org/repository/bytedance_android/"
+
+                }
+                maven {
+                    url "https://artifact.bytedance.com/repository/Volcengine/"
+                }
+
+
+
+
+                maven {
+                    url "https://artifact.bytedance.com/repository/pangle/"
+                }
+
+                maven {
+                    url "https://artifact.bytedance.com/repository/AwemeOpenSDK"
+                }
+                //火山引擎maven仓库地址
+                maven { url 'https://artifact.bytedance.com/repository/Volcengine/' }
+//穿山甲maven仓库地址
+                maven { url 'https://artifact.bytedance.com/repository/pangle' }
+
+                maven { url 'https://developer.huawei.com/repo/' }
+                maven { url 'https://developer.huawei.com/repo/' }
+                maven { url 'https://developer.hihonor.com/repo/' }
+
+
+
+
+
+
+                // 华为开源镜像：https://mirrors.huaweicloud.com
+                maven { url 'https://repo.huaweicloud.com/repository/maven' }
+                maven { url 'https://developer.huawei.com/repo/' }
+
+                maven { url "https://mvn.shalltry.com/repository/maven-public/" }
+                // 必选项
+                maven { url "https://mvn.shalltry.com/repository/ad-releases/" }
+                // 如需接入 ironsource ，请添加
+                maven { url 'https://android-sdk.is.com/' }
+                // 如需接入 pangle ，请添加
+                maven { url 'https://artifact.bytedance.com/repository/pangle' }
+                // 国内应用市场，Android X Version；如需接入 mintegral ，请添加
+                maven { url "https://dl-maven-android.mintegral.com/repository/mbridge_android_sdk_china" }
+                // 国外应用市场，Android X Version；如需接入 mintegral ，请添加
+                maven { url "https://dl-maven-android.mintegral.com/repository/mbridge_android_sdk_oversea" }
+
+                // 必选项
+                maven { url "https://mvn.shalltry.com/repository/maven-public/" }
+                // 必选项
+                maven { url "https://mvn.shalltry.com/repository/ad-releases/" }
+                // 如需接入 ironsource ，请添加
+                maven { url 'https://android-sdk.is.com/' }
+                // 如需接入 pangle ，请添加
+                maven { url 'https://artifact.bytedance.com/repository/pangle' }
+                // 国内应用市场，Android X Version；如需接入 mintegral ，请添加
+                maven { url "https://dl-maven-android.mintegral.com/repository/mbridge_android_sdk_china" }
+                // 国外应用市场，Android X Version；如需接入 mintegral ，请添加
+                maven { url "https://dl-maven-android.mintegral.com/repository/mbridge_android_sdk_oversea" }
+
+                includeGroupByRegex("com\\.android.*")
+                includeGroupByRegex("com\\.google.*")
+                includeGroupByRegex("androidx.*")
+            }
+        }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+
+        // 阿里云云效仓库：https://maven.aliyun.com/mvn/guide
+        maven { url 'https://maven.aliyun.com/repository/central' }
+        maven { url 'https://maven.aliyun.com/repository/jcenter' }
+        maven { url 'https://maven.aliyun.com/repository/google' }
+
+        // 第二步：可选-配置阿里云其他仓库（如gradle-plugin、spring等）
+        maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+        maven { url 'https://maven.aliyun.com/repository/spring' }
+
+        maven {
+            // 正式版组件仓库
+            url "https://maven.byted.org/repository/bytedance_android/"
+
+        }
+        maven {
+            url "https://artifact.bytedance.com/repository/Volcengine/"
+        }
+
+
+
+
+        maven {
+            url "https://artifact.bytedance.com/repository/pangle/"
+        }
+
+        maven {
+            url "https://artifact.bytedance.com/repository/AwemeOpenSDK"
+        }
+        //火山引擎maven仓库地址
+        maven { url 'https://artifact.bytedance.com/repository/Volcengine/' }
+//穿山甲maven仓库地址
+        maven { url 'https://artifact.bytedance.com/repository/pangle' }
+
+        maven { url 'https://developer.huawei.com/repo/' }
+        maven { url 'https://developer.huawei.com/repo/' }
+        maven { url 'https://developer.hihonor.com/repo/' }
+
+
+
+
+
+
+        // 华为开源镜像：https://mirrors.huaweicloud.com
+        maven { url 'https://repo.huaweicloud.com/repository/maven' }
+        maven { url 'https://developer.huawei.com/repo/' }
+
+        maven { url "https://mvn.shalltry.com/repository/maven-public/" }
+        // 必选项
+        maven { url "https://mvn.shalltry.com/repository/ad-releases/" }
+        // 如需接入 ironsource ，请添加
+        maven { url 'https://android-sdk.is.com/' }
+        // 如需接入 pangle ，请添加
+        maven { url 'https://artifact.bytedance.com/repository/pangle' }
+        // 国内应用市场，Android X Version；如需接入 mintegral ，请添加
+        maven { url "https://dl-maven-android.mintegral.com/repository/mbridge_android_sdk_china" }
+        // 国外应用市场，Android X Version；如需接入 mintegral ，请添加
+        maven { url "https://dl-maven-android.mintegral.com/repository/mbridge_android_sdk_oversea" }
+
+        // 必选项
+        maven { url "https://mvn.shalltry.com/repository/maven-public/" }
+        // 必选项
+        maven { url "https://mvn.shalltry.com/repository/ad-releases/" }
+        // 如需接入 ironsource ，请添加
+        maven { url 'https://android-sdk.is.com/' }
+        // 如需接入 pangle ，请添加
+        maven { url 'https://artifact.bytedance.com/repository/pangle' }
+        // 国内应用市场，Android X Version；如需接入 mintegral ，请添加
+        maven { url "https://dl-maven-android.mintegral.com/repository/mbridge_android_sdk_china" }
+        // 国外应用市场，Android X Version；如需接入 mintegral ，请添加
+        maven { url "https://dl-maven-android.mintegral.com/repository/mbridge_android_sdk_oversea" }
+
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "SimpleMp3Playr"
+include ':app'
