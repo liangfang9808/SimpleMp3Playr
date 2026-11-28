@@ -313,7 +313,7 @@ public class MusicPlayerService extends Service {
             return 0;
         }
         int pos = Math.max(0, Math.min(mediaPlayer.getCurrentPosition(), duration));
-        System.out.println("pos"+"="+pos);
+        //System.out.println("pos"+"="+pos);
         return (int) ((pos * (long) MAX_PROGRESS) / duration);
     }
 

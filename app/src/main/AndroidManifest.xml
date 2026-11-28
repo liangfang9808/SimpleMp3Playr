@@ -18,7 +18,7 @@
         android:theme="@style/Theme.MyApplication">
 
         <activity
-            android:name=".googel.MainActivity"
+            android:name=".MainActivity"
             android:exported="true">
 
             <intent-filter>
@@ -34,12 +34,14 @@
             android:enabled="true"
             android:exported="false"
             android:stopWithTask="false" />
-        <service
-            android:name=".googel.MusicPlayerService"
-            android:enabled="true"
-            android:exported="false"
-            android:stopWithTask="false" />
+        <!--
+       <service
+           android:name=".googel.MusicPlayerService"
+           android:enabled="true"
+           android:exported="false"
+           android:stopWithTask="false" />
+            -->
 
-    </application>
+   </application>
 
 </manifest>

@@ -155,6 +155,8 @@ public class MainActivity extends ComponentActivity {
         initVolumeControl();
         initBackPressed();
         checkStoragePermission();
+
+        System.out.println("google");
     }
 
     /**
